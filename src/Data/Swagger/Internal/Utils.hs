@@ -1,3 +1,9 @@
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE StandaloneDeriving #-}
+
 {-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -19,6 +25,34 @@ import Data.Traversable
 import GHC.Generics
 import Language.Haskell.TH
 import Text.Read (readMaybe)
+
+data If (b :: Bool) x y where
+  Then :: x -> If 'True  x y
+  Else :: y -> If 'False x y
+
+type x `When`   b = If b x ()
+type x `Unless` b = If b () x
+
+deriving instance (Eq x, Eq y) => Eq (If b x y)
+deriving instance (Show x, Show y) => Show (If b x y)
+
+instance SwaggerMonoid x => SwaggerMonoid (If 'True x y) where
+  swaggerMempty = Then swaggerMempty
+  swaggerMappend (Then x) (Then y) = Then (swaggerMappend x y)
+
+instance SwaggerMonoid y => SwaggerMonoid (If 'False x y) where
+  swaggerMempty = Else swaggerMempty
+  swaggerMappend (Else x) (Else y) = Else (swaggerMappend x y)
+
+instance (ToJSON x, ToJSON y) => ToJSON (If b x y) where
+  toJSON (Then x) = toJSON x
+  toJSON (Else y) = toJSON y
+
+instance FromJSON x => FromJSON (If 'True x y) where
+  parseJSON json = Then <$> parseJSON json
+
+instance FromJSON y => FromJSON (If 'False x y) where
+  parseJSON json = Else <$> parseJSON json
 
 hashMapMapKeys :: (Eq k', Hashable k') => (k -> k') -> HashMap k v -> HashMap k' v
 hashMapMapKeys f = HashMap.fromList . map (first f) . HashMap.toList

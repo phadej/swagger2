@@ -1,3 +1,10 @@
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE PolyKinds #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE UndecidableInstances #-}
+
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE FlexibleInstances #-}
@@ -23,6 +30,7 @@ import           Data.String              (fromString)
 import           Data.Text                (Text)
 import qualified Data.Text                as Text
 import           Data.Traversable         (Traversable)
+import           Data.Type.Equality
 import           Data.Hashable            (Hashable)
 import           GHC.Generics             (Generic)
 import           Network                  (HostName, PortNumber)
@@ -62,7 +70,7 @@ data Swagger = Swagger
   , _paths :: Paths
 
     -- | An object to hold data types produced and consumed by operations.
-  , _definitions :: HashMap Text Schema
+  , _definitions :: HashMap Text SomeSchema
 
     -- | An object to hold parameters that can be used across operations.
     -- This property does not define global parameters for all operations.
@@ -277,7 +285,7 @@ data Parameter = Parameter
   } deriving (Eq, Show, Generic)
 
 data ParameterSchema
-  = ParameterBody (Referenced Schema)
+  = ParameterBody (Referenced SomeSchema)
   | ParameterOther ParameterOtherSchema
   deriving (Eq, Show)
 
@@ -383,17 +391,57 @@ data ItemsCollectionFormat
 
 type ParamName = Text
 
-data Schema = Schema
-  { _schemaType :: SchemaType
-  , _schemaFormat :: Maybe Format
+data SomeSchema = forall ty. KnownSchemaType ty => SomeSchema (Schema ty)
+
+deriving instance Show SomeSchema
+
+instance Eq SomeSchema where
+  SomeSchema x == SomeSchema y =
+    case testEquality (sSchemaType x) (sSchemaType y) of
+      Nothing -> False
+      Just Refl -> x == y
+
+data SSchemaType ty where
+  SSchemaArray :: SSchemaType 'SchemaArray
+  SSchemaBoolean :: SSchemaType 'SchemaBoolean
+  SSchemaInteger :: SSchemaType 'SchemaInteger
+  SSchemaNumber :: SSchemaType 'SchemaNumber
+  SSchemaNull :: SSchemaType 'SchemaNull
+  SSchemaObject :: SSchemaType 'SchemaObject
+  SSchemaString :: SSchemaType 'SchemaString
+
+instance TestEquality SSchemaType where
+  testEquality SSchemaArray SSchemaArray = Just Refl
+  testEquality SSchemaBoolean SSchemaBoolean = Just Refl
+  testEquality SSchemaInteger SSchemaInteger = Just Refl
+  testEquality SSchemaNumber SSchemaNumber = Just Refl
+  testEquality SSchemaNull SSchemaNull = Just Refl
+  testEquality SSchemaObject SSchemaObject = Just Refl
+  testEquality SSchemaString SSchemaString = Just Refl
+  testEquality _ _ = Nothing
+
+class KnownSchemaType ty where
+  schemaType :: proxy ty -> SchemaType
+  sSchemaType :: proxy ty -> SSchemaType ty
+
+instance KnownSchemaType SchemaArray where schemaType _ = SchemaArray; sSchemaType _ = SSchemaArray
+instance KnownSchemaType SchemaBoolean where schemaType _ = SchemaBoolean; sSchemaType _ = SSchemaBoolean
+instance KnownSchemaType SchemaInteger where schemaType _ = SchemaInteger; sSchemaType _ = SSchemaInteger
+instance KnownSchemaType SchemaNumber where schemaType _ = SchemaNumber; sSchemaType _ = SSchemaNumber
+instance KnownSchemaType SchemaNull where schemaType _ = SchemaNull; sSchemaType _ = SSchemaNull
+instance KnownSchemaType SchemaObject where schemaType _ = SchemaObject; sSchemaType _ = SSchemaObject
+instance KnownSchemaType SchemaString where schemaType _ = SchemaString; sSchemaType _ = SSchemaString
+
+data Schema ty = Schema
+  { _schemaFormat :: Maybe Format
   , _schemaTitle :: Maybe Text
   , _schemaDescription :: Maybe Text
-  , _schemaRequired :: [ParamName]
+  , _schemaRequired :: [ParamName] `When` (ty == SchemaObject)
 
   , _schemaItems :: Maybe SchemaItems
-  , _schemaAllOf :: Maybe [Schema]
-  , _schemaProperties :: HashMap Text (Referenced Schema)
-  , _schemaAdditionalProperties :: Maybe Schema
+  , _schemaAllOf :: Maybe [Schema ty]
+  , _schemaProperties :: HashMap Text (Referenced SomeSchema)
+  , _schemaAdditionalProperties :: Maybe SomeSchema
 
   , _schemaDiscriminator :: Maybe Text
   , _schemaReadOnly :: Maybe Bool
@@ -408,8 +456,8 @@ data Schema = Schema
   } deriving (Eq, Show, Generic)
 
 data SchemaItems
-  = SchemaItemsObject (Referenced Schema)
-  | SchemaItemsArray [Referenced Schema]
+  = SchemaItemsObject (Referenced SomeSchema)
+  | SchemaItemsArray [Referenced SomeSchema]
   deriving (Eq, Show)
 
 data SchemaCommon = SchemaCommon
@@ -508,7 +556,7 @@ data Response = Response
     -- If this field does not exist, it means no content is returned as part of the response.
     -- As an extension to the Schema Object, its root type value may also be "file".
     -- This SHOULD be accompanied by a relevant produces mime-type.
-  , _responseSchema :: Maybe (Referenced Schema)
+  , _responseSchema :: Maybe (Referenced SomeSchema)
 
     -- | A list of headers that are sent with the response.
   , _responseHeaders :: HashMap HeaderName Header
@@ -655,7 +703,7 @@ instance Monoid PathItem where
   mempty = genericMempty
   mappend = genericMappend
 
-instance Monoid Schema where
+instance (SwaggerMonoid ([ParamName] `When` (ty == 'SchemaObject))) => Monoid (Schema ty) where
   mempty = genericMempty
   mappend = genericMappend
 
@@ -694,7 +742,9 @@ instance Monoid Operation where
 instance SwaggerMonoid Info
 instance SwaggerMonoid Paths
 instance SwaggerMonoid PathItem
-instance SwaggerMonoid Schema
+
+instance SwaggerMonoid (Schema 'SchemaObject)
+
 instance SwaggerMonoid SchemaCommon
 instance SwaggerMonoid Parameter
 instance SwaggerMonoid ParameterOtherSchema
@@ -718,11 +768,11 @@ instance SwaggerMonoid ParameterLocation where
   swaggerMempty = ParameterQuery
   swaggerMappend _ y = y
 
-instance SwaggerMonoid (HashMap Text Schema) where
+instance SwaggerMonoid (HashMap Text SomeSchema) where
   swaggerMempty = HashMap.empty
   swaggerMappend = HashMap.unionWith mappend
 
-instance SwaggerMonoid (HashMap Text (Referenced Schema)) where
+instance SwaggerMonoid (HashMap Text (Referenced SomeSchema)) where
   swaggerMempty = HashMap.empty
   swaggerMappend = HashMap.unionWith swaggerMappend
 
@@ -827,7 +877,7 @@ instance ToJSON Swagger where
 instance ToJSON SecurityScheme where
   toJSON = genericToJSONWithSub "type" (jsonPrefix "securityScheme")
 
-instance ToJSON Schema where
+instance ToJSON (Schema ty) where
   toJSON = genericToJSONWithSub "schemaCommon" (jsonPrefix "schema")
 
 instance ToJSON Header where
@@ -914,7 +964,7 @@ instance FromJSON Swagger where
                      , "produces" .= (mempty :: MimeList)
                      , "security" .= ([] :: [SecurityRequirement])
                      , "tags" .= ([] :: [Tag])
-                     , "definitions" .= (mempty :: HashMap Text Schema)
+                     , "definitions" .= (mempty :: HashMap Text SomeSchema)
                      , "parameters" .= (mempty :: HashMap Text Parameter)
                      , "responses" .= (mempty :: HashMap Text Response)
                      , "securityDefinitions" .= (mempty :: HashMap Text SecurityScheme)
@@ -924,9 +974,9 @@ instance FromJSON Swagger where
 instance FromJSON SecurityScheme where
   parseJSON = genericParseJSONWithSub "type" (jsonPrefix "securityScheme")
 
-instance FromJSON Schema where
+instance FromJSON SomeSchema where
   parseJSON = genericParseJSONWithSub "schemaCommon" (jsonPrefix "schema")
-    `withDefaults` [ "properties" .= (mempty :: HashMap Text Schema)
+    `withDefaults` [ "properties" .= (mempty :: HashMap Text SomeSchema)
                    , "required"   .= ([] :: [ParamName]) ]
 
 instance FromJSON Header where
