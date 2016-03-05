@@ -1,5 +1,10 @@
 flags: {}
 packages:
 - '.'
-extra-deps: []
-resolver: nightly-2016-01-26
+- location:
+    git: https://github.com/phadej/insert-ordered-containers.git
+    commit: 36e62ff2f74fd6cc2195a84ef39b941b62570996
+  extra-dep: true
+extra-deps:
+- aeson-0.11.1.0
+resolver: nightly-2016-03-04
