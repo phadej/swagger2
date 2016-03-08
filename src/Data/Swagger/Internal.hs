@@ -57,6 +57,13 @@ import Data.Swagger.Internal.AesonUtils (sopSwaggerGenericToJSON
                                         ,saoSubObject)
 import Data.Swagger.Internal.Utils
 
+#if MIN_VERSION_aeson(0,10,0)
+import Data.Swagger.Internal.AesonUtils (sopSwaggerGenericToEncoding)
+#define DEFINE_TOENCODING toEncoding = sopSwaggerGenericToEncoding
+#else
+#define DEFINE_TOENCODING
+#endif
+
 -- | A list of definitions that can be used in references.
 type Definitions = InsOrdHashMap Text
 
@@ -988,15 +995,19 @@ instance ToJSON SecuritySchemeType where
 
 instance ToJSON Swagger where
   toJSON = sopSwaggerGenericToJSON
+  DEFINE_TOENCODING
 
 instance ToJSON SecurityScheme where
   toJSON = sopSwaggerGenericToJSON
+  DEFINE_TOENCODING
 
 instance ToJSON Schema where
   toJSON = sopSwaggerGenericToJSON
+  DEFINE_TOENCODING
 
 instance ToJSON Header where
   toJSON = sopSwaggerGenericToJSON
+  DEFINE_TOENCODING
 
 instance ToJSON (ParamSchema t) => ToJSON (SwaggerItems t) where
   toJSON (SwaggerItemsPrimitive fmt schema) = object
